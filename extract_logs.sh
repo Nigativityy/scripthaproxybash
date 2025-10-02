@@ -34,23 +34,10 @@ mv "$GENERAL_OUTPUT_FILE.tmp" "$GENERAL_OUTPUT_FILE"
 grep -oP '\b\d{1,3}(\.\d{1,3}){3}\b' "$SPECIFIC_OUTPUT_FILE" > "$SPECIFIC_OUTPUT_FILE.tmp"
 mv "$SPECIFIC_OUTPUT_FILE.tmp" "$SPECIFIC_OUTPUT_FILE"
 
-# ─── Log Summary ───
-ENTRY_COUNT=$(wc -l < "$GENERAL_OUTPUT_FILE")
-log_info "General access attempts: $ENTRY_COUNT entries"
-tail -n 20 "$GENERAL_OUTPUT_FILE" >> "$DEBUG_FILE"
-
-ENTRY_COUNT=$(wc -l < "$SPECIFIC_OUTPUT_FILE")
-log_info "Specific termination states: $ENTRY_COUNT entries"
-tail -n 20 "$SPECIFIC_OUTPUT_FILE" >> "$DEBUG_FILE"
-
 # ─── Combine and Count IPs ───
 log_info "Combining, sorting, and counting unique IPs."
 cat "$GENERAL_OUTPUT_FILE" "$SPECIFIC_OUTPUT_FILE" | sort | uniq -c |
     awk '{print $2 "-" $1}' > "$UNIQUE_IP_FILE"
-
-ENTRY_COUNT=$(wc -l < "$UNIQUE_IP_FILE")
-log_info "Unique IPs and their counts: $ENTRY_COUNT entries"
-tail -n 20 "$UNIQUE_IP_FILE" >> "$DEBUG_FILE"
 
 # ─── Clear Intermediate Files ───
 : > "$ABUSE_IPS_FILE"
@@ -76,7 +63,6 @@ check_ip_reputation() {
         -H "Key: $API_KEY" \
         -H "Accept: application/json")
 
-    # Handle cases where curl might time out or fail
     if [[ -z "$response" ]]; then
         log_error "No response from AbuseIPDB API for IP: $ip"
         echo "{\"ip\": \"$ip\", \"count\": $count}" >> "$VALID_IPS_FILE"
@@ -84,21 +70,25 @@ check_ip_reputation() {
     fi
 
     local abuseScore totalReports
-    # Use a single jq call to safely extract both values into shell variables
     eval "$(jq -r '.data | {abuseScore: .abuseConfidenceScore, totalReports: .totalReports} | to_entries | .[] | .key + "=" + (.value | @sh)' <<< "$response")"
 
-    # Handle cases where values might be null from the API
-    if [[ -z "$abuseScore" || "$abuseScore" == "null" ]]; then
-        abuseScore=0
-    fi
-    if [[ -z "$totalReports" || "$totalReports" == "null" ]]; then
-        totalReports=0
-    fi
+    if [[ -z "$abuseScore" || "$abuseScore" == "null" ]]; then abuseScore=0; fi
+    if [[ -z "$totalReports" || "$totalReports" == "null" ]]; then totalReports=0; fi
 
     if (( abuseScore > 0 )); then
-        # Add the new fields 'score' and 'reports' to the JSON output for abusive IPs
-        echo "{\"ip\": \"$ip\", \"count\": $count, \"score\": $abuseScore, \"reports\": $totalReports}" >> "$ABUSE_IPS_FILE"
-        log_info "$ip classified as abusive (score $abuseScore, reports $totalReports)"
+        log_info "Fetching provider details for abusive IP: $ip"
+        local details_response
+        details_response=$(curl -s --connect-timeout 5 "http://ip-api.com/json/${ip}?fields=status,country,city,isp")
+
+        local provider_details="N/A / N/A / N/A"
+        if [[ -n "$details_response" ]] && [[ $(jq -r '.status' <<< "$details_response") == "success" ]]; then
+            provider_details=$(jq -r '[.country, .city, .isp] | join(" / ")' <<< "$details_response")
+        else
+            log_error "Failed to get provider details for $ip"
+        fi
+
+        echo "{\"ip\": \"$ip\", \"count\": $count, \"score\": $abuseScore, \"reports\": $totalReports, \"provider\": \"$provider_details\"}" >> "$ABUSE_IPS_FILE"
+        log_info "$ip classified as abusive (score $abuseScore, reports $totalReports, provider: $provider_details)"
     else
         echo "{\"ip\": \"$ip\", \"count\": $count}" >> "$VALID_IPS_FILE"
         log_info "$ip classified as valid (score $abuseScore)"
@@ -114,11 +104,9 @@ while IFS= read -r line; do
     if is_private_ip "$ip"; then
         echo "{\"ip\": \"$ip\", \"count\": $count}" >> "$PRIVATE_IP_COUNTS_FILE"
     else
-        # Public IPs are split into "valid" and "abusive" inside the check_ip_reputation function
         echo "{\"ip\": \"$ip\", \"count\": $count}" >> "$PUBLIC_IP_COUNTS_FILE"
         check_ip_reputation "$ip" "$count"
     fi
-
 done < "$UNIQUE_IP_FILE"
 
 # ─── Assemble results.json ───
@@ -142,7 +130,6 @@ results=$(jq -n \
       last_run: $last_run
   }')
 
-# Atomically write the final JSON file to avoid race conditions with the node server
 if jq -e . <<< "$results" > /dev/null; then
     echo "$results" > "/home/cyber/results.json.tmp" && mv "/home/cyber/results.json.tmp" "/home/cyber/results.json"
     log_info "results.json written successfully"
