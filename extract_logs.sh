@@ -22,17 +22,15 @@ log_error() {
 log_info "Script started."
 DATE_TODAY=$(date '+%d/%b/%Y')
 
-# ─── Filter and Extract IPs ───
+# ─── Create a temporary file for today's logs to search against ---
 log_info "Filtering logs for today's date: $DATE_TODAY"
-grep "$DATE_TODAY" "$LOG_FILE" > "$GENERAL_OUTPUT_FILE"
-grep "$DATE_TODAY" "$LOG_FILE" | grep -E " cD | SD " > "$SPECIFIC_OUTPUT_FILE"
+TODAY_LOG_FILE=$(mktemp)
+grep "$DATE_TODAY" "$LOG_FILE" > "$TODAY_LOG_FILE"
 
+# --- Extract IPs from today's logs ---
 log_info "Extracting IP addresses from filtered logs."
-grep -oP '\b\d{1,3}(\.\d{1,3}){3}\b' "$GENERAL_OUTPUT_FILE" > "$GENERAL_OUTPUT_FILE.tmp"
-mv "$GENERAL_OUTPUT_FILE.tmp" "$GENERAL_OUTPUT_FILE"
-
-grep -oP '\b\d{1,3}(\.\d{1,3}){3}\b' "$SPECIFIC_OUTPUT_FILE" > "$SPECIFIC_OUTPUT_FILE.tmp"
-mv "$SPECIFIC_OUTPUT_FILE.tmp" "$SPECIFIC_OUTPUT_FILE"
+grep -oP '\b\d{1,3}(\.\d{1,3}){3}\b' "$TODAY_LOG_FILE" > "$GENERAL_OUTPUT_FILE"
+grep -E " cD | SD " "$TODAY_LOG_FILE" | grep -oP '\b\d{1,3}(\.\d{1,3}){3}\b' > "$SPECIFIC_OUTPUT_FILE"
 
 # ─── Combine and Count IPs ───
 log_info "Combining, sorting, and counting unique IPs."
@@ -87,7 +85,23 @@ check_ip_reputation() {
             log_error "Failed to get provider details for $ip"
         fi
 
-        echo "{\"ip\": \"$ip\", \"count\": $count, \"score\": $abuseScore, \"reports\": $totalReports, \"provider\": \"$provider_details\"}" >> "$ABUSE_IPS_FILE"
+        # --- MODIFICATION START: Extract raw log lines for the abusive IP ---
+        log_info "Extracting actions for $ip"
+        local actions_json
+        # Grep for the IP in today's logs, then use jq to format the lines into a JSON array
+        actions_json=$(grep -- "$ip" "$TODAY_LOG_FILE" | jq -R . | jq -s .)
+        # --- MODIFICATION END ---
+        
+        # Build the final JSON object with jq to handle all data types correctly
+        jq -n \
+          --arg ip "$ip" \
+          --argjson count "$count" \
+          --argjson score "$abuseScore" \
+          --argjson reports "$totalReports" \
+          --arg provider "$provider_details" \
+          --argjson actions "$actions_json" \
+          '{ip: $ip, count: $count, score: $score, reports: $reports, provider: $provider, actions: $actions}' >> "$ABUSE_IPS_FILE"
+
         log_info "$ip classified as abusive (score $abuseScore, reports $totalReports, provider: $provider_details)"
     else
         echo "{\"ip\": \"$ip\", \"count\": $count}" >> "$VALID_IPS_FILE"
@@ -137,5 +151,7 @@ else
     log_error "Failed to generate valid results.json"
 fi
 
+# --- Clean up temporary log file ---
+rm "$TODAY_LOG_FILE"
 log_info "Script finished."
 echo "Results updated"
