@@ -18,45 +18,41 @@
   <script>
     // Global chart instances
     let charts = {};
-
   </script>
   <style>
     body {
       color: #fff;
       font-size: 18px;
-      /* background-color: #1c2228; */
       background-color: #11181d;
-      /* background-color: #20272e; */
       height: 100%;
       text-align: center;
       padding: 0;
     }
 
     .card {
-      /* background-color: dimgray; */
       border: 2px solid #20272e;
-      /* background: #11181d; */
-      /* background-color: #20272e;  */
       background-color: #262d34;
-      /* background-color: transparent; */
-      /* text-decoration-color: black; */
       width: 33%;
       padding: 24px;
       text-align: center;
       margin: 0 auto;
-      /* flex: 0 0 33%; */
-    }
-
-    #privateLineChart {
-      display: none;
     }
 
     table {
       color: #fff !important;
     }
 
-    #abuseTable tr td {
-      background-color: red;
+    #abuseTable thead {
+      font-weight: bold;
+    }
+
+    /* MODIFICATION: Added style for red background on abuse IP rows */
+    #abuseTable tbody tr {
+        background-color: #5c1a1a; /* A dark, readable red */
+        border-bottom: 2px solid #11181d; /* Adds a separator between rows */
+    }
+    #abuseTable tbody tr:hover {
+        background-color: #7d2a2a; /* Slightly lighter red on hover */
     }
 
     canvas {
@@ -66,7 +62,6 @@
   </style>
 </head>
 
-
 <body>
   <div class="container-fluid" data-bs-theme="dark">
     <h2>Webmail access - Last Run: <span id="lastRun"></span></h2>
@@ -74,12 +69,8 @@
       <div class="card col-lg-3">
         <h2>Private IPs</h2>
         <canvas id="privatePieChart" width="400" height="400"></canvas>
-        <!-- <canvas id="privateLineChart" width="400" height="300"></canvas> -->
         <table id="privateTable" class="table table-sm table-striped">
           <thead>
-            <!-- <tr>
-              <th colspan="2" class="text-center">Private IP Addresses</th>
-            </tr> -->
             <tr>
               <th>IP Address</th>
               <th>Count</th>
@@ -91,12 +82,8 @@
       <div class="card col-lg-6">
         <h2>Public IPs</h2>
         <canvas id="publicPieChart" width="400" height="400"></canvas>
-        <!-- <canvas id="publicLineChart" width="400" height="300"></canvas> -->
         <table id="publicTable" class="table table-sm table-striped">
           <thead>
-            <!-- <tr>
-              <th colspan="3" class="text-center">Public IP Addresses</th>
-            </tr> -->
             <tr>
               <th>IP Address</th>
               <th>Count</th>
@@ -108,19 +95,15 @@
       </div>
       <div class="card col-lg-3">
         <h2>Abuse IPs</h2>
-        <!-- <canvas id="abusePieChart" width="400" height="400"></canvas> -->
-        <!-- <canvas id="abuseLineChart" width="400" height="100"></canvas> -->
+        <canvas id="abusePieChart" width="400" height="400"></canvas>
         <table id="abuseTable" class="table table-borderless table-sm">
           <thead>
             <tr>
               <th>IP Address</th>
               <th>Count</th>
+              <th>Abuse Score</th>
+              <th>Reports (90d)</th>
             </tr>
-            <!-- TEST Highlight abuse IP -->
-            <!-- <tr>
-              <td>123.456.789.123</td>
-              <td>23</td>
-            </tr> -->
           </thead>
           <tbody class="table-group-divider"></tbody>
         </table>
@@ -131,23 +114,28 @@
   <script src="/socket.io/socket.io.js"></script>
 
   <script>
-    // Function to create a doughnut chart
+    // Function to create a doughnut chart and store its instance
     function createPieChart(canvasId, chartData) {
       const ctx = document.getElementById(canvasId).getContext('2d');
       const labels = chartData.map(item => item.ip);
       const data = chartData.map(item => item.count);
 
-      new Chart(ctx, {
+      // Destroy existing chart if it exists to prevent duplicates
+      if (charts[canvasId]) {
+        charts[canvasId].destroy();
+      }
+
+      charts[canvasId] = new Chart(ctx, { // MODIFICATION: Store chart instance
         type: 'doughnut',
         data: {
           labels: labels,
           datasets: [{
             data: data,
             backgroundColor: [
-            '#E57373', '#64B5F6', '#FFD54F', '#4DB6AC', '#BA68C8', '#FF8A65',
-            '#F06292', '#7986CB', '#81C784', '#FFCCBC', '#90CAF9',
-            '#FF0000', '#007BFF', '#FFD700', '#00FF7F', '#8000FF', '#FF4500',
-            '#FF1493', '#483D8B', '#32CD32', '#FFA07A', '#00CED1'
+              '#E57373', '#64B5F6', '#FFD54F', '#4DB6AC', '#BA68C8', '#FF8A65',
+              '#F06292', '#7986CB', '#81C784', '#FFCCBC', '#90CAF9',
+              '#FF0000', '#007BFF', '#FFD700', '#00FF7F', '#8000FF', '#FF4500',
+              '#FF1493', '#483D8B', '#32CD32', '#FFA07A', '#00CED1'
             ],
           }]
         },
@@ -156,85 +144,14 @@
           plugins: {
             legend: {
               position: 'right',
-              labels: {
-                color: '#fff',
-                    font: {
-                        size: 14
-                    }
-              }
+              labels: { color: '#fff', font: { size: 14 } }
             },
             datalabels: {
               color: '#fff',
-              formatter: function (value) {
-                return `${value}`;  // Display the number of hits
-              },
+              formatter: (value) => `${value}`,
               display: true,
               align: 'center',
               anchor: 'center'
-            },
-            title: {
-              display: false,
-              text: `${canvasId.replace('PieChart', '')} IPs`
-            }
-          }
-        }
-      });
-    }
-
-    // Function to create a line chart
-    function createLineChart(canvasId, chartData) {
-      const ctx = document.getElementById(canvasId).getContext('2d');
-      const labels = chartData.map(item => item.ip);
-      const data = chartData.map(item => item.count);
-
-      new Chart(ctx, {
-        type: 'bar',
-        data: {
-          labels: labels,
-          datasets: [{
-            label: 'Number of Hits',
-            data: data,
-            borderColor: '#FF6384',
-            backgroundColor: 'rgba(255, 99, 132, 0.2)',
-            fill: true,
-            tension: 0.1
-          }]
-        },
-        options: {
-          responsive: true,
-          plugins: {
-            legend: {
-              display: true,
-              position: 'top',
-            },
-            datalabels: {
-              color: '#333',
-              formatter: function (value) {
-                return `${value}`;  // Display the number of hits
-              },
-              display: true,
-              align: 'top',
-              anchor: 'end'
-            },
-            title: {
-              display: false,
-              text: `Line Chart of ${canvasId.replace('LineChart', '')} IPs`
-            }
-          },
-          scales: {
-            x: {
-              beginAtZero: true,
-              title: {
-                display: true,
-                text: 'IP Addresses'
-              }
-            },
-            y: {
-              beginAtZero: true,
-              title: {
-                display: true,
-                text: 'Number of Hits'
-              }
             }
           }
         }
@@ -242,142 +159,97 @@
     }
 
     async function getIpDetailsBatch(ips) {
-      // Batch request to ip-api.com for multiple IPs
       const response = await fetch(`http://ip-api.com/batch`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(ips.map(ip => ({ query: ip, fields: "status,country,city,isp" })))
       });
-
       const data = await response.json();
-      return data.map(item => {
-        if (item.status === "success") {
-          return {
-            country: item.country,
-            city: item.city,
-            isp: item.isp
-          };
-        } else {
-          return {
-            country: "N/A",
-            city: "N/A",
-            isp: "N/A"
-          };
-        }
-      });
+      return data.map(item => (item.status === "success") ? item : { country: "N/A", city: "N/A", isp: "N/A" });
     }
 
     function createTable(tableId, data) {
-      const table = document.getElementById(tableId).getElementsByTagName('tbody')[0];
-      table.innerHTML = '';
+      const tbody = document.getElementById(tableId).getElementsByTagName('tbody')[0];
+      tbody.innerHTML = '';
       data.forEach(item => {
-        const row = table.insertRow();
-        const cell1 = row.insertCell(0);
-        const cell2 = row.insertCell(1);
-        cell1.textContent = item.ip;
-        cell2.textContent = item.count;
+        const row = tbody.insertRow();
+        row.insertCell(0).textContent = item.ip;
+        row.insertCell(1).textContent = item.count;
       });
     }
 
     async function createDetailedTable(tableId, data) {
-      const table = document.getElementById(tableId).getElementsByTagName('tbody')[0];
-      table.innerHTML = '';
-
-      // Extract the list of IP addresses for batch request
+      const tbody = document.getElementById(tableId).getElementsByTagName('tbody')[0];
+      tbody.innerHTML = '';
       const ipList = data.map(item => item.ip);
-
-      // Fetch IP details in batch
       const ipDetailsList = await getIpDetailsBatch(ipList);
-
       data.forEach((item, index) => {
-        const row = table.insertRow();
-
-        const cell1 = row.insertCell(0);
-        const cell2 = row.insertCell(1);
-        const cell3 = row.insertCell(2);
-
-        // Fill table with IP data
-        cell1.textContent = item.ip;
-        cell2.textContent = item.count;
-
-        // Fill table with location and ISP data from the batch request
+        const row = tbody.insertRow();
+        row.insertCell(0).textContent = item.ip;
+        row.insertCell(1).textContent = item.count;
         const ipDetails = ipDetailsList[index];
-        cell3.textContent = ipDetails.country+' / '+ipDetails.city+' / '+ipDetails.isp;
+        row.insertCell(2).textContent = `${ipDetails.country} / ${ipDetails.city} / ${ipDetails.isp}`;
+      });
+    }
+
+    function createAbuseTable(tableId, data) {
+      const tbody = document.getElementById(tableId).getElementsByTagName('tbody')[0];
+      tbody.innerHTML = '';
+      data.forEach(item => {
+        const row = tbody.insertRow();
+        row.insertCell(0).textContent = item.ip;
+        row.insertCell(1).textContent = item.count;
+        row.insertCell(2).textContent = item.score + '%';
+        row.insertCell(3).textContent = item.reports;
       });
     }
 
     // Function to update chart data
     function updateChart(chartId, newData) {
-      if (charts[chartId]) { // Ensure the chart exists before updating
+      if (charts[chartId]) {
         const chart = charts[chartId];
-        const labels = newData.map(item => item.ip);
-        const data = newData.map(item => item.count);
-
-        chart.data.labels = labels;
-        chart.data.datasets[0].data = data;
+        chart.data.labels = newData.map(item => item.ip);
+        chart.data.datasets[0].data = newData.map(item => item.count);
         chart.update();
-      } else {
-        console.error(`Chart with ID '${chartId}' is not initialized.`);
       }
     }
-
 
     // Initial load of results when the page loads
     fetch('/results')
       .then(response => response.json())
       .then(data => {
         document.getElementById('lastRun').textContent = data.last_run;
-        // Create and store pie charts
-        var privatePieChart = createPieChart('privatePieChart', data.private_ips);
-        var publicPieChart = createPieChart('publicPieChart', data.public_ips);
-        var abusePieChart = createPieChart('abusePieChart', data.abuse_ips);
 
-        // Create and store line charts
-        var privateLineChart = createLineChart('privateLineChart', data.private_ips);
-        var publicLineChart = createLineChart('publicLineChart', data.public_ips);
-        var abuseLineChart = createLineChart('abuseLineChart', data.abuse_ips);
+        // MODIFICATION: Create all tables and charts on initial load
+        createTable('privateTable', data.private_ips);
+        createDetailedTable('publicTable', data.public_ips);
+        createAbuseTable('abuseTable', data.abuse_ips);
 
-        // Create table for each category
-        // createTable('privateTable', data.private_ips);
-        // createTable('publicTable', data.public_ips);
-        // createTable('abuseTable', data.abuse_ips);
+        createPieChart('privatePieChart', data.private_ips);
+        createPieChart('publicPieChart', data.public_ips);
+        createPieChart('abusePieChart', data.abuse_ips);
       });
-
-
 
     const socket = io();
     socket.on('update', (data) => {
       const results = JSON.parse(data);
       document.getElementById('lastRun').textContent = results.last_run;
 
-      function updateCharts(data) {
-        updateChart('privatePieChart', data.private_ips);
-        updateChart('publicPieChart', data.public_ips);
-        updateChart('abusePieChart', data.abuse_ips);
-
-        updateChart('privateLineChart', data.private_ips);
-        updateChart('publicLineChart', data.public_ips);
-        updateChart('abuseLineChart', data.abuse_ips);
-      }
-
+      // MODIFICATION: Update tables and charts on new data
       createTable('privateTable', results.private_ips);
       createDetailedTable('publicTable', results.public_ips);
-      createDetailedTable('abuseTable', results.abuse_ips);
+      createAbuseTable('abuseTable', results.abuse_ips);
+
+      updateChart('privatePieChart', results.private_ips);
+      updateChart('publicPieChart', results.public_ips);
+      updateChart('abusePieChart', results.abuse_ips);
     });
 
-
-    // Reîncarcă pagina la fiecare 5 minute (300000 ms)
+    // Reload the page every 5 minutes (300000 ms)
     setInterval(() => {
         location.reload();
     }, 300000);
-
-
   </script>
 
-
-
 </body>
-
 </html>
