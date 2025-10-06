@@ -56,7 +56,6 @@
         color: #64B5F6; /* Light Blue */
         font-weight: bold;
     }
-    /* MODIFICATION: Added style for the port number */
     .log-item .log-port {
         color: #FFD54F; /* Yellow */
     }
@@ -80,10 +79,10 @@
         <table id="privateTable" class="table table-sm table-striped"><thead><tr><th>IP Address</th><th>Count</th></tr></thead><tbody class="table-group-divider"></tbody></table>
       </div>
       <div class="card col-lg-6">
-        <h2>Public IPs</h2>
+        <h2>Valid Public IPs</h2>
         <canvas id="publicPieChart" width="400" height="400"></canvas>
         <h4 class="mt-3">Total Hits: <span id="publicTotalHits" class="badge badge-light">0</span></h4>
-        <table id="publicTable" class="table table-sm table-striped"><thead><tr><th>IP Address</th><th>Count</th><th>Details</th></tr></thead><tbody class="table-group-divider"></tbody></table>
+        <table id="publicTable" class="table table-sm table-striped"><thead><tr><th>IP Address</th><th>Count</th><th>Logs</th></tr></thead><tbody class="table-group-divider"></tbody></table>
       </div>
       <div class="card col-lg-3">
         <h2>Abuse IPs</h2>
@@ -102,7 +101,7 @@
   <script src="/socket.io/socket.io.js"></script>
   <script>
     let charts = {};
-    
+
     function createPieChart(canvasId, chartData) {
       const ctx = document.getElementById(canvasId).getContext('2d');
       if (charts[canvasId]) { charts[canvasId].destroy(); }
@@ -113,22 +112,47 @@
           datasets: [{ data: chartData.map(item => item.count), backgroundColor: ['#E57373','#64B5F6','#FFD54F','#4DB6AC','#BA68C8','#FF8A65','#F06292','#7986CB','#81C784','#FFCCBC','#90CAF9','#FF0000','#007BFF','#FFD700','#00FF7F','#8000FF','#FF4500','#FF1493','#483D8B','#32CD32','#FFA07A','#00CED1'], borderWidth: 0 }]
         },
         options: {
-          responsive: false,
-          cutout: '60%',
-          plugins: {
-            legend: {
-              position: 'right',
-              labels: { color: '#fff', font: { size: 14 } }
-            }
-          }
+          responsive: false, cutout: '60%',
+          plugins: { legend: { position: 'right', labels: { color: '#fff', font: { size: 14 } } } }
         }
       });
     }
 
-    async function getIpDetailsBatch(ips) {
-      const response = await fetch(`http://ip-api.com/batch`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(ips.map(ip => ({ query: ip, fields: "status,country,city,isp" }))) });
-      const data = await response.json();
-      return data.map(item => (item.status === "success") ? item : { country: "N/A", city: "N/A", isp: "N/A" });
+    function showLogModal(item) {
+        document.getElementById('logModalLabel').textContent = `Logs for ${item.ip}`;
+        const modalBody = document.getElementById('logModalBody');
+        modalBody.innerHTML = '';
+
+        const providerInfo = document.createElement('div');
+        providerInfo.className = 'log-item';
+        providerInfo.style.backgroundColor = '#0c1014';
+        providerInfo.innerHTML = `<span class="log-detail" style="color: #FFD54F;"><strong>Provider:</strong> ${item.provider || 'N/A'}</span>`;
+        modalBody.appendChild(providerInfo);
+
+        const logRegex = /:(\d+)\s+\[(.*?)\]\s+http_frontend\s+http_servers\/(\w+)\s+[\d\/]+\/(\d+)\s+\d+\s+([A-Z-]{2})/;
+
+        if (item.actions && item.actions.length > 0) {
+            item.actions.forEach(logLine => {
+                const match = logLine.match(logRegex);
+                const logItem = document.createElement('div');
+                logItem.className = 'log-item';
+                if (match) {
+                    const [ , port, timestamp, backend, duration, termState ] = match;
+                    logItem.innerHTML = `
+                        <span class="log-timestamp">[${timestamp}]</span>
+                        <span class="log-port">Port: <strong>${port}</strong></span>
+                        <span class="log-detail"><strong>Backend:</strong> ${backend}</span>
+                        <span class="log-detail"><strong>Duration:</strong> ${duration}ms</span>
+                        <span class="log-detail"><strong>Status:</strong> ${termState === '--' ? 'NORMAL' : termState}</span>`;
+                } else {
+                    logItem.textContent = logLine;
+                }
+                modalBody.appendChild(logItem);
+            });
+        } else {
+            modalBody.innerHTML += '<div class="log-item">No detailed log entries found.</div>';
+        }
+        $('#logModal').modal('show');
     }
 
     function createTable(tableId, data) {
@@ -144,22 +168,25 @@
       });
     }
 
-    async function createDetailedTable(tableId, data) {
-      data.sort((a, b) => b.count - a.count);
-      const total = data.reduce((sum, item) => sum + item.count, 0);
-      document.getElementById('publicTotalHits').textContent = total;
-      const tbody = document.getElementById(tableId).getElementsByTagName('tbody')[0];
-      tbody.innerHTML = '';
-      const ipDetailsList = await getIpDetailsBatch(data.map(item => item.ip));
-      data.forEach((item, index) => {
-        const row = tbody.insertRow();
-        row.insertCell(0).textContent = item.ip;
-        row.insertCell(1).textContent = item.count;
-        const ipDetails = ipDetailsList[index];
-        row.insertCell(2).textContent = `${ipDetails.country} / ${ipDetails.city} / ${ipDetails.isp}`;
-      });
+    function createValidPublicIpTable(tableId, data) {
+        data.sort((a, b) => b.count - a.count);
+        const total = data.reduce((sum, item) => sum + item.count, 0);
+        document.getElementById('publicTotalHits').textContent = total;
+        const tbody = document.getElementById(tableId).getElementsByTagName('tbody')[0];
+        tbody.innerHTML = '';
+        data.forEach(item => {
+            const row = tbody.insertRow();
+            row.insertCell(0).textContent = item.ip;
+            row.insertCell(1).textContent = item.count;
+            const actionCell = row.insertCell(2);
+            const button = document.createElement('button');
+            button.className = 'btn btn-info btn-sm';
+            button.textContent = 'View';
+            button.addEventListener('click', () => showLogModal(item));
+            actionCell.appendChild(button);
+        });
     }
-    
+
     function createAbuseTable(tableId, data) {
       data.sort((a, b) => b.count - a.count);
       const total = data.reduce((sum, item) => sum + item.count, 0);
@@ -176,46 +203,7 @@
         const button = document.createElement('button');
         button.className = 'btn btn-danger btn-sm';
         button.textContent = 'View';
-        button.addEventListener('click', () => {
-          document.getElementById('logModalLabel').textContent = `Logs for ${item.ip}`;
-          const modalBody = document.getElementById('logModalBody');
-          modalBody.innerHTML = '';
-          
-          // MODIFICATION: Updated Regex to capture the source port
-          const logRegex = /:(\d+)\s+\[(.*?)\]\s+http_frontend\s+http_servers\/(\w+)\s+[\d\/]+\/(\d+)\s+\d+\s+([A-Z-]{2})/;
-
-          if (item.actions && item.actions.length > 0) {
-            item.actions.forEach(logLine => {
-              const match = logLine.match(logRegex);
-              const logItem = document.createElement('div');
-              logItem.className = 'log-item';
-
-              if (match) {
-                // MODIFICATION: Map the new captured groups
-                const port = match[1];
-                const timestamp = match[2];
-                const backend = match[3];
-                const duration = match[4];
-                const termState = match[5] === '--' ? 'NORMAL' : match[5];
-
-                // MODIFICATION: Add the port to the display
-                logItem.innerHTML = `
-                  <span class="log-timestamp">[${timestamp}]</span>
-                  <span class="log-port">Port: <strong>${port}</strong></span>
-                  <span class="log-detail"><strong>Backend:</strong> ${backend}</span>
-                  <span class="log-detail"><strong>Duration:</strong> ${duration}ms</span>
-                  <span class="log-detail"><strong>Status:</strong> ${termState}</span>
-                `;
-              } else {
-                logItem.textContent = logLine;
-              }
-              modalBody.appendChild(logItem);
-            });
-          } else {
-            modalBody.textContent = 'No detailed log entries found.';
-          }
-          $('#logModal').modal('show');
-        });
+        button.addEventListener('click', () => showLogModal(item));
         actionCell.appendChild(button);
       });
     }
@@ -233,11 +221,11 @@
     fetch('/results').then(r => r.json()).then(data => {
       document.getElementById('lastRun').textContent = data.last_run;
       createTable('privateTable', data.private_ips);
-      createDetailedTable('publicTable', data.public_ips);
       createAbuseTable('abuseTable', data.abuse_ips);
+      createValidPublicIpTable('publicTable', data.valid_ips);
       createPieChart('privatePieChart', data.private_ips);
-      createPieChart('publicPieChart', data.public_ips);
       createPieChart('abusePieChart', data.abuse_ips);
+      createPieChart('publicPieChart', data.valid_ips);
     });
 
     const socket = io();
@@ -245,11 +233,11 @@
       const results = JSON.parse(data);
       document.getElementById('lastRun').textContent = results.last_run;
       createTable('privateTable', results.private_ips);
-      createDetailedTable('publicTable', results.public_ips);
       createAbuseTable('abuseTable', results.abuse_ips);
+      createValidPublicIpTable('publicTable', results.valid_ips);
       updateChart('privatePieChart', results.private_ips);
-      updateChart('publicPieChart', results.public_ips);
       updateChart('abusePieChart', results.abuse_ips);
+      updateChart('publicPieChart', results.valid_ips);
     });
 
     setInterval(() => { location.reload(); }, 300000);
