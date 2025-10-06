@@ -41,7 +41,6 @@ cat "$GENERAL_OUTPUT_FILE" "$SPECIFIC_OUTPUT_FILE" | sort | uniq -c |
 : > "$ABUSE_IPS_FILE"
 : > "$VALID_IPS_FILE"
 : > "$PRIVATE_IP_COUNTS_FILE"
-: > "$PUBLIC_IP_COUNTS_FILE"
 
 # ─── IP Check Functions ───
 is_private_ip() {
@@ -63,8 +62,8 @@ check_ip_reputation() {
 
     if [[ -z "$response" ]]; then
         log_error "No response from AbuseIPDB API for IP: $ip"
-        echo "{\"ip\": \"$ip\", \"count\": $count}" >> "$VALID_IPS_FILE"
-        return
+        # If the API fails, we treat the IP as valid by default
+        response='{"data":{"abuseConfidenceScore":0, "totalReports":0}}'
     fi
 
     local abuseScore totalReports
@@ -73,38 +72,37 @@ check_ip_reputation() {
     if [[ -z "$abuseScore" || "$abuseScore" == "null" ]]; then abuseScore=0; fi
     if [[ -z "$totalReports" || "$totalReports" == "null" ]]; then totalReports=0; fi
 
+    # --- Data for provider details is gathered for ALL public IPs before the if/else check. ---
+    log_info "Fetching provider details for $ip"
+    local details_response
+    details_response=$(curl -s --connect-timeout 5 "http://ip-api.com/json/${ip}?fields=status,country,city,isp")
+
+    local provider_details="N/A / N/A / N/A"
+    if [[ -n "$details_response" ]] && [[ $(jq -r '.status' <<< "$details_response") == "success" ]]; then
+        provider_details=$(jq -r '[.country, .city, .isp] | join(" / ")' <<< "$details_response")
+    else
+        log_error "Failed to get provider details for $ip"
+    fi
+
     if (( abuseScore > 0 )); then
-        log_info "Fetching provider details for abusive IP: $ip"
-        local details_response
-        details_response=$(curl -s --connect-timeout 5 "http://ip-api.com/json/${ip}?fields=status,country,city,isp")
-
-        local provider_details="N/A / N/A / N/A"
-        if [[ -n "$details_response" ]] && [[ $(jq -r '.status' <<< "$details_response") == "success" ]]; then
-            provider_details=$(jq -r '[.country, .city, .isp] | join(" / ")' <<< "$details_response")
-        else
-            log_error "Failed to get provider details for $ip"
-        fi
-
-        # --- MODIFICATION START: Extract raw log lines for the abusive IP ---
-        log_info "Extracting actions for $ip"
-        local actions_json
-        # Grep for the IP in today's logs, then use jq to format the lines into a JSON array
-        actions_json=$(grep -- "$ip" "$TODAY_LOG_FILE" | jq -R . | jq -s .)
-        # --- MODIFICATION END ---
-        
-        # Build the final JSON object with jq to handle all data types correctly
-        jq -n \
+        # Build the JSON for an ABUSIVE IP by piping the large log data
+        grep -- "$ip" "$TODAY_LOG_FILE" | jq -R . | jq -s . | jq \
           --arg ip "$ip" \
           --argjson count "$count" \
           --argjson score "$abuseScore" \
           --argjson reports "$totalReports" \
           --arg provider "$provider_details" \
-          --argjson actions "$actions_json" \
-          '{ip: $ip, count: $count, score: $score, reports: $reports, provider: $provider, actions: $actions}' >> "$ABUSE_IPS_FILE"
+          '{ip: $ip, count: $count, score: $score, reports: $reports, provider: $provider, actions: .}' >> "$ABUSE_IPS_FILE"
 
-        log_info "$ip classified as abusive (score $abuseScore, reports $totalReports, provider: $provider_details)"
+        log_info "$ip classified as abusive (score $abuseScore, provider: $provider_details)"
     else
-        echo "{\"ip\": \"$ip\", \"count\": $count}" >> "$VALID_IPS_FILE"
+        # Build the JSON for a VALID IP, using the data we already gathered
+        grep -- "$ip" "$TODAY_LOG_FILE" | jq -R . | jq -s . | jq \
+          --arg ip "$ip" \
+          --argjson count "$count" \
+          --arg provider "$provider_details" \
+          '{ip: $ip, count: $count, provider: $provider, actions: .}' >> "$VALID_IPS_FILE"
+        
         log_info "$ip classified as valid (score $abuseScore)"
     fi
 }
@@ -118,27 +116,22 @@ while IFS= read -r line; do
     if is_private_ip "$ip"; then
         echo "{\"ip\": \"$ip\", \"count\": $count}" >> "$PRIVATE_IP_COUNTS_FILE"
     else
-        echo "{\"ip\": \"$ip\", \"count\": $count}" >> "$PUBLIC_IP_COUNTS_FILE"
         check_ip_reputation "$ip" "$count"
     fi
 done < "$UNIQUE_IP_FILE"
 
 # ─── Assemble results.json ───
 log_info "Assembling the final results.json file."
-private_ips=$(jq -s . "$PRIVATE_IP_COUNTS_FILE")
-public_ips=$(jq -s . "$PUBLIC_IP_COUNTS_FILE")
-abuse_ips=$(jq -s . "$ABUSE_IPS_FILE")
-valid_ips=$(jq -s . "$VALID_IPS_FILE")
 
+# Use --slurpfile to have jq read the intermediate files directly.
+# This is the robust way to handle large data and avoids "Argument list too long".
 results=$(jq -n \
-  --argjson private_ips "$private_ips" \
-  --argjson public_ips "$public_ips" \
-  --argjson abuse_ips "$abuse_ips" \
-  --argjson valid_ips "$valid_ips" \
+  --slurpfile private_ips "$PRIVATE_IP_COUNTS_FILE" \
+  --slurpfile abuse_ips "$ABUSE_IPS_FILE" \
+  --slurpfile valid_ips "$VALID_IPS_FILE" \
   --arg last_run "$(date '+%Y-%m-%d %H:%M:%S')" \
   '{
       private_ips: $private_ips,
-      public_ips: $public_ips,
       abuse_ips: $abuse_ips,
       valid_ips: $valid_ips,
       last_run: $last_run
